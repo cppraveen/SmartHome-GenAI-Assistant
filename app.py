@@ -203,112 +203,349 @@ def control_device():
         logger.error(f"Device not found: {endpoint_id}")
         abort(404, description="Device not found.")
 
-    device_state = device_registry[endpoint_id]["state"]
+    device_info = device_registry[endpoint_id]
+    device_state = device_info["state"]
+    device_type = device_info["type"]
     new_state_value = None
     success_message = "Command executed."
 
-    # Handle RangeController for water level (simulate refill/drain)
-    if namespace == "Alexa.RangeController" and name == "SetRangeValue":
-        if header.get('instance') == "WaterLevel.coffee_maker_123":
-            new_level = payload.get('rangeValue')
-            if isinstance(new_level, (int, float)) and 0 <= new_level <= 100:
-                device_state["waterLevel"] = new_level
-                new_state_value = {"name": "rangeValue", "value": new_level, "instance": header['instance']}
-                success_message = f"Set water level to {new_level}%."
-                logger.info(f"Actuating physical device {endpoint_id}: SET WATER LEVEL to {new_level}")
+    # --- COFFEE MAKER logic (existing) ---
+    if device_type == "COFFEE_MAKER":
+        if namespace == "Alexa.PowerController":
+            if name == "TurnOn":
+                device_state["powerState"] = "ON"
+                new_state_value = {"name": "powerState", "value": "ON"}
+                success_message = f"{device_registry[endpoint_id]['friendlyName']} turned on."
+                logger.info(f"Actuating physical device {endpoint_id}: TURN ON")
                 try:
-                    mqtt_client.publish(f"devices/{endpoint_id}/waterLevel", str(new_level))
+                    mqtt_client.publish(f"devices/{endpoint_id}/power", "ON")
+                except Exception as e:
+                    logger.warning(f"MQTT publish failed: {e}")
+            elif name == "TurnOff":
+                device_state["powerState"] = "OFF"
+                new_state_value = {"name": "powerState", "value": "OFF"}
+                success_message = f"{device_registry[endpoint_id]['friendlyName']} turned off."
+                logger.info(f"Actuating physical device {endpoint_id}: TURN OFF")
+                try:
+                    mqtt_client.publish(f"devices/{endpoint_id}/power", "OFF")
                 except Exception as e:
                     logger.warning(f"MQTT publish failed: {e}")
             else:
-                logger.error("Invalid water level value.")
-                abort(400, description="Invalid water level value.")
+                abort(400, description="Unsupported PowerController command.")
+        elif namespace == "Alexa.ModeController":
+            if name == "SetMode":
+                if header.get('instance') == "BrewStrength.coffee_maker_123":
+                    new_mode = payload.get('mode')
+                    if new_mode and new_mode.get('value') in ["light", "medium", "strong"]:
+                        device_state["brewStrength"] = new_mode['value']
+                        new_state_value = {"name": "mode", "value": new_mode['value'], "instance": header['instance']}
+                        success_message = f"Set brew strength to {new_mode['value']}."
+                        logger.info(f"Actuating physical device {endpoint_id}: SET BREW STRENGTH to {new_mode['value']}")
+                        try:
+                            mqtt_client.publish(f"devices/{endpoint_id}/brewStrength", new_mode['value'])
+                        except Exception as e:
+                            logger.warning(f"MQTT publish failed: {e}")
+                    else:
+                        abort(400, description="Invalid brew strength.")
+                elif header.get('instance') == "ErrorState.coffee_maker_123":
+                    new_error = payload.get('mode', {}).get('value')
+                    if new_error in ["none", "lowWater", "jammed"]:
+                        device_state["errorState"] = new_error
+                        new_state_value = {"name": "mode", "value": new_error, "instance": header['instance']}
+                        logger.info(f"Set error state to {new_error}")
+                    else:
+                        abort(400, description="Invalid error state value.")
+                else:
+                    abort(400, description="Unsupported mode instance.")
+            else:
+                abort(400, description="Unsupported ModeController command.")
+        elif namespace == "Alexa.RangeController":
+            if name == "SetRangeValue":
+                if header.get('instance') == "WaterLevel.coffee_maker_123":
+                    new_level = payload.get('rangeValue')
+                    if isinstance(new_level, (int, float)) and 0 <= new_level <= 100:
+                        device_state["waterLevel"] = new_level
+                        new_state_value = {"name": "rangeValue", "value": new_level, "instance": header['instance']}
+                        success_message = f"Set water level to {new_level}%."
+                        logger.info(f"Actuating physical device {endpoint_id}: SET WATER LEVEL to {new_level}")
+                        try:
+                            mqtt_client.publish(f"devices/{endpoint_id}/waterLevel", str(new_level))
+                        except Exception as e:
+                            logger.warning(f"MQTT publish failed: {e}")
+                    else:
+                        logger.error("Invalid water level value.")
+                        abort(400, description="Invalid water level value.")
+                else:
+                    logger.error("Unsupported range instance.")
+                    abort(400, description="Unsupported range instance.")
+            else:
+                abort(400, description="Unsupported RangeController command.")
+        elif namespace == "Alexa.EndpointHealth":
+            if name == "ReportState":
+                properties = []
+                if "powerState" in device_state:
+                    properties.append({"namespace": "Alexa.PowerController", "name": "powerState",
+                                       "value": device_state["powerState"], "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
+                if "brewStrength" in device_state:
+                    properties.append({"namespace": "Alexa.ModeController", "name": "mode", "instance": "BrewStrength.coffee_maker_123",
+                                       "value": device_state["brewStrength"], "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
+                if "waterLevel" in device_state:
+                    properties.append({"namespace": "Alexa.RangeController", "name": "rangeValue", "instance": "WaterLevel.coffee_maker_123",
+                                       "value": device_state["waterLevel"], "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
+                properties.append({"namespace": "Alexa.EndpointHealth", "name": "connectivity", "value": {"value": "OK"}, "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
+                if "errorState" in device_state:
+                    properties.append({"namespace": "Alexa.ModeController", "name": "mode", "instance": "ErrorState.coffee_maker_123",
+                                       "value": device_state["errorState"], "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
+                return jsonify({
+                    "event": {
+                        "header": {
+                            "namespace": "Alexa",
+                            "name": "StateReport",
+                            "payloadVersion": "3",
+                            "messageId": "unique-message-id",
+                            "correlationToken": correlation_token
+                        },
+                        "endpoint": {"endpointId": endpoint_id},
+                        "payload": {"properties": properties}
+                    }
+                }), 200
+            else:
+                abort(400, description="Unsupported EndpointHealth command.")
         else:
-            logger.error("Unsupported range instance.")
-            abort(400, description="Unsupported range instance.")
+            abort(400, description="Unsupported coffee maker namespace.")
 
-    # Simulate error state (for demonstration)
-    elif namespace == "Alexa.ModeController" and name == "SetMode" and header.get('instance') == "ErrorState.coffee_maker_123":
-        new_error = payload.get('mode', {}).get('value')
-        if new_error in ["none", "lowWater", "jammed"]:
-            device_state["errorState"] = new_error
-            new_state_value = {"name": "mode", "value": new_error, "instance": header['instance']}
-            logger.info(f"Set error state to {new_error}")
-        else:
-            logger.error("Invalid error state value.")
-            abort(400, description="Invalid error state value.")
-
-    elif namespace == "Alexa.PowerController" and name == "TurnOn":
-        device_state["powerState"] = "ON"
-        new_state_value = {"name": "powerState", "value": "ON"}
-        success_message = f"{device_registry[endpoint_id]['friendlyName']} turned on."
-        logger.info(f"Actuating physical device {endpoint_id}: TURN ON")
-        try:
-            mqtt_client.publish(f"devices/{endpoint_id}/power", "ON")
-        except Exception as e:
-            logger.warning(f"MQTT publish failed: {e}")
-
-    elif namespace == "Alexa.PowerController" and name == "TurnOff":
-        device_state["powerState"] = "OFF"
-        new_state_value = {"name": "powerState", "value": "OFF"}
-        success_message = f"{device_registry[endpoint_id]['friendlyName']} turned off."
-        logger.info(f"Actuating physical device {endpoint_id}: TURN OFF")
-        try:
-            mqtt_client.publish(f"devices/{endpoint_id}/power", "OFF")
-        except Exception as e:
-            logger.warning(f"MQTT publish failed: {e}")
-
-    elif namespace == "Alexa.ModeController" and name == "SetMode":
-        if header.get('instance') == "BrewStrength.coffee_maker_123":
-            new_mode = payload.get('mode')
-            if new_mode and new_mode.get('value') in ["light", "medium", "strong"]:
-                device_state["brewStrength"] = new_mode['value']
-                new_state_value = {"name": "mode", "value": new_mode['value'], "instance": header['instance']}
-                success_message = f"Set brew strength to {new_mode['value']}."
-                logger.info(f"Actuating physical device {endpoint_id}: SET BREW STRENGTH to {new_mode['value']}")
+    # --- SMART LIGHT logic ---
+    elif device_type == "LIGHT":
+        if namespace == "Alexa.PowerController":
+            if name == "TurnOn":
+                device_state["powerState"] = "ON"
+                new_state_value = {"name": "powerState", "value": "ON"}
+                success_message = f"{device_registry[endpoint_id]['friendlyName']} turned on."
+                logger.info(f"Actuating physical device {endpoint_id}: TURN ON")
                 try:
-                    mqtt_client.publish(f"devices/{endpoint_id}/brewStrength", new_mode['value'])
+                    mqtt_client.publish(f"devices/{endpoint_id}/power", "ON")
+                except Exception as e:
+                    logger.warning(f"MQTT publish failed: {e}")
+            elif name == "TurnOff":
+                device_state["powerState"] = "OFF"
+                new_state_value = {"name": "powerState", "value": "OFF"}
+                success_message = f"{device_registry[endpoint_id]['friendlyName']} turned off."
+                logger.info(f"Actuating physical device {endpoint_id}: TURN OFF")
+                try:
+                    mqtt_client.publish(f"devices/{endpoint_id}/power", "OFF")
                 except Exception as e:
                     logger.warning(f"MQTT publish failed: {e}")
             else:
-                logger.error("Invalid brew strength.")
-                abort(400, description="Invalid brew strength.")
+                abort(400, description="Unsupported PowerController command.")
+        elif namespace == "Alexa.BrightnessController":
+            if name == "SetBrightness":
+                brightness = payload.get("brightness")
+                if isinstance(brightness, int) and 0 <= brightness <= 100:
+                    device_state["brightness"] = brightness
+                    new_state_value = {"name": "brightness", "value": brightness}
+                    success_message = f"Light {device_registry[endpoint_id]['friendlyName']} brightness set to {brightness}."
+                    logger.info(f"Actuating physical device {endpoint_id}: SET BRIGHTNESS to {brightness}")
+                    try:
+                        mqtt_client.publish(f"devices/{endpoint_id}/brightness", str(brightness))
+                    except Exception as e:
+                        logger.warning(f"MQTT publish failed: {e}")
+                else:
+                    abort(400, description="Invalid brightness value.")
+            else:
+                abort(400, description="Unsupported BrightnessController command.")
+        elif namespace == "Alexa.ColorController":
+            if name == "SetColor":
+                color = payload.get("color")
+                if color and all(k in color for k in ("hue", "saturation", "brightness")):
+                    device_state["color"] = color
+                    new_state_value = {"name": "color", "value": color}
+                    success_message = f"Light {device_registry[endpoint_id]['friendlyName']} color set to {color}."
+                    logger.info(f"Actuating physical device {endpoint_id}: SET COLOR to {color}")
+                    try:
+                        mqtt_client.publish(f"devices/{endpoint_id}/color", str(color))
+                    except Exception as e:
+                        logger.warning(f"MQTT publish failed: {e}")
+                else:
+                    abort(400, description="Invalid color value.")
+            else:
+                abort(400, description="Unsupported ColorController command.")
+        elif namespace == "Alexa.EndpointHealth":
+            if name == "ReportState":
+                properties = []
+                if "powerState" in device_state:
+                    properties.append({"namespace": "Alexa.PowerController", "name": "powerState",
+                                       "value": device_state["powerState"], "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
+                if "brightness" in device_state:
+                    properties.append({"namespace": "Alexa.BrightnessController", "name": "brightness",
+                                       "value": device_state["brightness"], "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
+                if "color" in device_state:
+                    properties.append({"namespace": "Alexa.ColorController", "name": "color",
+                                       "value": device_state["color"], "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
+                properties.append({"namespace": "Alexa.EndpointHealth", "name": "connectivity", "value": {"value": "OK"}, "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
+                return jsonify({
+                    "event": {
+                        "header": {
+                            "namespace": "Alexa",
+                            "name": "StateReport",
+                            "payloadVersion": "3",
+                            "messageId": "unique-message-id",
+                            "correlationToken": correlation_token
+                        },
+                        "endpoint": {"endpointId": endpoint_id},
+                        "payload": {"properties": properties}
+                    }
+                }), 200
+            else:
+                abort(400, description="Unsupported EndpointHealth command.")
         else:
-            logger.error("Unsupported mode instance.")
-            abort(400, description="Unsupported mode instance.")
+            abort(400, description="Unsupported light namespace.")
 
-    elif namespace == "Alexa.StateReport" and name == "ReportState":
-        logger.info(f"State report requested for {endpoint_id}")
-        properties = []
-        if "powerState" in device_state:
-            properties.append({"namespace": "Alexa.PowerController", "name": "powerState",
-                               "value": device_state["powerState"], "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
-        if "brewStrength" in device_state:
-            properties.append({"namespace": "Alexa.ModeController", "name": "mode", "instance": "BrewStrength.coffee_maker_123",
-                               "value": device_state["brewStrength"], "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
-        if "waterLevel" in device_state:
-            properties.append({"namespace": "Alexa.RangeController", "name": "rangeValue", "instance": "WaterLevel.coffee_maker_123",
-                               "value": device_state["waterLevel"], "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
-        # EndpointHealth
-        properties.append({"namespace": "Alexa.EndpointHealth", "name": "connectivity", "value": {"value": "OK"}, "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
-        # Error state
-        if "errorState" in device_state:
-            properties.append({"namespace": "Alexa.ModeController", "name": "mode", "instance": "ErrorState.coffee_maker_123",
-                               "value": device_state["errorState"], "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
-        return jsonify({
-            "event": {
-                "header": {
-                    "namespace": "Alexa",
-                    "name": "StateReport",
-                    "payloadVersion": "3",
-                    "messageId": "unique-message-id",
-                    "correlationToken": correlation_token
-                },
-                "endpoint": {"endpointId": endpoint_id},
-                "payload": {"properties": properties}
-            }
-        }), 200
+    # --- THERMOSTAT logic ---
+    elif device_type == "THERMOSTAT":
+        if namespace == "Alexa.ThermostatController":
+            if name == "SetTargetTemperature":
+                target = payload.get("targetSetpoint", {}).get("value")
+                if isinstance(target, (int, float)):
+                    device_state["targetSetpoint"] = target
+                    new_state_value = {"name": "targetSetpoint", "value": target}
+                    success_message = f"Thermostat {device_registry[endpoint_id]['friendlyName']} setpoint set to {target}."
+                    logger.info(f"Actuating physical device {endpoint_id}: SET TARGET SETPOINT to {target}")
+                    try:
+                        mqtt_client.publish(f"devices/{endpoint_id}/targetSetpoint", str(target))
+                    except Exception as e:
+                        logger.warning(f"MQTT publish failed: {e}")
+                else:
+                    abort(400, description="Invalid target setpoint value.")
+            elif name == "SetThermostatMode":
+                mode = payload.get("thermostatMode")
+                if mode in ["HEAT", "COOL", "AUTO", "OFF"]:
+                    device_state["thermostatMode"] = mode
+                    new_state_value = {"name": "thermostatMode", "value": mode}
+                    success_message = f"Thermostat {device_registry[endpoint_id]['friendlyName']} mode set to {mode}."
+                    logger.info(f"Actuating physical device {endpoint_id}: SET THERMOSTAT MODE to {mode}")
+                    try:
+                        mqtt_client.publish(f"devices/{endpoint_id}/thermostatMode", mode)
+                    except Exception as e:
+                        logger.warning(f"MQTT publish failed: {e}")
+                else:
+                    abort(400, description="Invalid thermostat mode.")
+            else:
+                abort(400, description="Unsupported ThermostatController command.")
+        elif namespace == "Alexa.TemperatureSensor":
+            if name == "ReportState":
+                properties = []
+                if "targetSetpoint" in device_state:
+                    properties.append({"namespace": "Alexa.ThermostatController", "name": "targetSetpoint",
+                                       "value": device_state["targetSetpoint"], "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
+                if "thermostatMode" in device_state:
+                    properties.append({"namespace": "Alexa.ThermostatController", "name": "thermostatMode",
+                                       "value": device_state["thermostatMode"], "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
+                if "temperature" in device_state:
+                    properties.append({"namespace": "Alexa.TemperatureSensor", "name": "temperature",
+                                       "value": device_state["temperature"], "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
+                properties.append({"namespace": "Alexa.EndpointHealth", "name": "connectivity", "value": {"value": "OK"}, "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
+                return jsonify({
+                    "event": {
+                        "header": {
+                            "namespace": "Alexa",
+                            "name": "StateReport",
+                            "payloadVersion": "3",
+                            "messageId": "unique-message-id",
+                            "correlationToken": correlation_token
+                        },
+                        "endpoint": {"endpointId": endpoint_id},
+                        "payload": {"properties": properties}
+                    }
+                }), 200
+            else:
+                abort(400, description="Unsupported TemperatureSensor command.")
+        elif namespace == "Alexa.EndpointHealth":
+            if name == "ReportState":
+                properties = []
+                if "targetSetpoint" in device_state:
+                    properties.append({"namespace": "Alexa.ThermostatController", "name": "targetSetpoint",
+                                       "value": device_state["targetSetpoint"], "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
+                if "thermostatMode" in device_state:
+                    properties.append({"namespace": "Alexa.ThermostatController", "name": "thermostatMode",
+                                       "value": device_state["thermostatMode"], "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
+                if "temperature" in device_state:
+                    properties.append({"namespace": "Alexa.TemperatureSensor", "name": "temperature",
+                                       "value": device_state["temperature"], "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
+                properties.append({"namespace": "Alexa.EndpointHealth", "name": "connectivity", "value": {"value": "OK"}, "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
+                return jsonify({
+                    "event": {
+                        "header": {
+                            "namespace": "Alexa",
+                            "name": "StateReport",
+                            "payloadVersion": "3",
+                            "messageId": "unique-message-id",
+                            "correlationToken": correlation_token
+                        },
+                        "endpoint": {"endpointId": endpoint_id},
+                        "payload": {"properties": properties}
+                    }
+                }), 200
+            else:
+                abort(400, description="Unsupported EndpointHealth command.")
+        else:
+            abort(400, description="Unsupported thermostat namespace.")
 
+    # --- CONTACT SENSOR logic (read-only, no control) ---
+    elif device_type == "CONTACT_SENSOR":
+        if namespace == "Alexa.ContactSensor":
+            if name == "ReportState":
+                properties = []
+                if "detectionState" in device_state:
+                    properties.append({"namespace": "Alexa.ContactSensor", "name": "detectionState",
+                                       "value": device_state["detectionState"], "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
+                if "temperature" in device_state:
+                    properties.append({"namespace": "Alexa.TemperatureSensor", "name": "temperature",
+                                       "value": device_state["temperature"], "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
+                properties.append({"namespace": "Alexa.EndpointHealth", "name": "connectivity", "value": {"value": "OK"}, "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
+                return jsonify({
+                    "event": {
+                        "header": {
+                            "namespace": "Alexa",
+                            "name": "StateReport",
+                            "payloadVersion": "3",
+                            "messageId": "unique-message-id",
+                            "correlationToken": correlation_token
+                        },
+                        "endpoint": {"endpointId": endpoint_id},
+                        "payload": {"properties": properties}
+                    }
+                }), 200
+            else:
+                abort(400, description="Unsupported ContactSensor command.")
+        elif namespace == "Alexa.EndpointHealth":
+            if name == "ReportState":
+                properties = []
+                if "detectionState" in device_state:
+                    properties.append({"namespace": "Alexa.ContactSensor", "name": "detectionState",
+                                       "value": device_state["detectionState"], "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
+                if "temperature" in device_state:
+                    properties.append({"namespace": "Alexa.TemperatureSensor", "name": "temperature",
+                                       "value": device_state["temperature"], "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
+                properties.append({"namespace": "Alexa.EndpointHealth", "name": "connectivity", "value": {"value": "OK"}, "timeOfSample": "2025-07-10T12:00:00.000Z", "uncertaintyInMilliseconds": 50})
+                return jsonify({
+                    "event": {
+                        "header": {
+                            "namespace": "Alexa",
+                            "name": "StateReport",
+                            "payloadVersion": "3",
+                            "messageId": "unique-message-id",
+                            "correlationToken": correlation_token
+                        },
+                        "endpoint": {"endpointId": endpoint_id},
+                        "payload": {"properties": properties}
+                    }
+                }), 200
+            else:
+                abort(400, description="Unsupported EndpointHealth command.")
+        else:
+            abort(400, description="Unsupported contact sensor namespace.")
+
+    # --- Fallback to existing coffee maker and generic logic for other commands ---
     else:
         logger.error("Unsupported command or namespace.")
         abort(400, description="Unsupported command or namespace.")
