@@ -67,7 +67,37 @@ device_registry = {
         "state": {
             "powerState": "OFF",
             "brewStrength": "medium",
-            "waterLevel": "full"  # Example of a retrievable property
+            "waterLevel": 100,
+            "errorState": "none"
+        }
+    },
+    "light_456": {
+        "id": "light_456",
+        "friendlyName": "Living Room Light",
+        "type": "LIGHT",
+        "state": {
+            "powerState": "OFF",
+            "brightness": 50,
+            "color": {"hue": 0, "saturation": 0, "brightness": 100}
+        }
+    },
+    "thermostat_789": {
+        "id": "thermostat_789",
+        "friendlyName": "Hallway Thermostat",
+        "type": "THERMOSTAT",
+        "state": {
+            "targetSetpoint": 22.0,
+            "temperature": 21.5,
+            "thermostatMode": "HEAT"
+        }
+    },
+    "sensor_321": {
+        "id": "sensor_321",
+        "friendlyName": "Front Door Sensor",
+        "type": "CONTACT_SENSOR",
+        "state": {
+            "detectionState": "NOT_DETECTED",
+            "temperature": 19.0
         }
     }
 }
@@ -80,32 +110,74 @@ def discover_devices():
     logger.info("Discovery request received.")
     endpoints = []
     for device_id, device_info in device_registry.items():
-        capabilities = [
-            {"type": "AlexaInterface", "interface": "Alexa.PowerController", "version": "3",
-             "properties": {"supported": [{"name": "powerState"}], "retrievable": True, "proactivelyReported": False}},
-            {"type": "AlexaInterface", "interface": "Alexa.ModeController", "version": "1.0",
-             "instance": "BrewStrength.coffee_maker_123", "capabilityResources": {"friendlyNames": [{"value": {"text": "brew strength", "locale": "en-US"}}]},
-             "properties": {"supported": [{"name": "mode"}], "retrievable": True, "proactivelyReported": False},
-             "configuration": {"ordered": False, "supportedModes": [
-                 {"value": "light", "modeResources": {"friendlyNames": [{"value": {"text": "light", "locale": "en-US"}}]}},
-                 {"value": "medium", "modeResources": {"friendlyNames": [{"value": {"text": "medium", "locale": "en-US"}}]}},
-                 {"value": "strong", "modeResources": {"friendlyNames": [{"value": {"text": "strong", "locale": "en-US"}}]}}
-             ]}},
-            {"type": "AlexaInterface", "interface": "Alexa.RangeController", "version": "3",
-             "instance": "WaterLevel.coffee_maker_123",
-             "capabilityResources": {"friendlyNames": [{"value": {"text": "water level", "locale": "en-US"}}]},
-             "properties": {"supported": [{"name": "rangeValue"}], "retrievable": True, "proactivelyReported": False},
-             "configuration": {"supportedRange": {"minimumValue": 0, "maximumValue": 100, "precision": 1},
-                                "unitOfMeasure": "Percent"}},
-            {"type": "AlexaInterface", "interface": "Alexa.EndpointHealth", "version": "3",
-             "properties": {"supported": [{"name": "connectivity"}], "retrievable": True, "proactivelyReported": False}}
-        ]
+        capabilities = []
+        if device_info["type"] == "COFFEE_MAKER":
+            capabilities = [
+                {"type": "AlexaInterface", "interface": "Alexa.PowerController", "version": "3",
+                 "properties": {"supported": [{"name": "powerState"}], "retrievable": True, "proactivelyReported": False}},
+                {"type": "AlexaInterface", "interface": "Alexa.ModeController", "version": "1.0",
+                 "instance": "BrewStrength.coffee_maker_123", "capabilityResources": {"friendlyNames": [{"value": {"text": "brew strength", "locale": "en-US"}}]},
+                 "properties": {"supported": [{"name": "mode"}], "retrievable": True, "proactivelyReported": False},
+                 "configuration": {"ordered": False, "supportedModes": [
+                     {"value": "light", "modeResources": {"friendlyNames": [{"value": {"text": "light", "locale": "en-US"}}]}},
+                     {"value": "medium", "modeResources": {"friendlyNames": [{"value": {"text": "medium", "locale": "en-US"}}]}},
+                     {"value": "strong", "modeResources": {"friendlyNames": [{"value": {"text": "strong", "locale": "en-US"}}]}}
+                 ]}},
+                {"type": "AlexaInterface", "interface": "Alexa.RangeController", "version": "3",
+                 "instance": "WaterLevel.coffee_maker_123",
+                 "capabilityResources": {"friendlyNames": [{"value": {"text": "water level", "locale": "en-US"}}]},
+                 "properties": {"supported": [{"name": "rangeValue"}], "retrievable": True, "proactivelyReported": False},
+                 "configuration": {"supportedRange": {"minimumValue": 0, "maximumValue": 100, "precision": 1},
+                                    "unitOfMeasure": "Percent"}},
+                {"type": "AlexaInterface", "interface": "Alexa.EndpointHealth", "version": "3",
+                 "properties": {"supported": [{"name": "connectivity"}], "retrievable": True, "proactivelyReported": False}},
+                {"type": "AlexaInterface", "interface": "Alexa.ModeController", "version": "1.0",
+                 "instance": "ErrorState.coffee_maker_123", "capabilityResources": {"friendlyNames": [{"value": {"text": "error state", "locale": "en-US"}}]},
+                 "properties": {"supported": [{"name": "mode"}], "retrievable": True, "proactivelyReported": False},
+                 "configuration": {"ordered": False, "supportedModes": [
+                     {"value": "none", "modeResources": {"friendlyNames": [{"value": {"text": "none", "locale": "en-US"}}]}},
+                     {"value": "lowWater", "modeResources": {"friendlyNames": [{"value": {"text": "low water", "locale": "en-US"}}]}},
+                     {"value": "jammed", "modeResources": {"friendlyNames": [{"value": {"text": "jammed", "locale": "en-US"}}]}}
+                 ]}}
+            ]
+        elif device_info["type"] == "LIGHT":
+            capabilities = [
+                {"type": "AlexaInterface", "interface": "Alexa.PowerController", "version": "3",
+                 "properties": {"supported": [{"name": "powerState"}], "retrievable": True, "proactivelyReported": False}},
+                {"type": "AlexaInterface", "interface": "Alexa.BrightnessController", "version": "3",
+                 "properties": {"supported": [{"name": "brightness"}], "retrievable": True, "proactivelyReported": False}},
+                {"type": "AlexaInterface", "interface": "Alexa.ColorController", "version": "3",
+                 "properties": {"supported": [{"name": "color"}], "retrievable": True, "proactivelyReported": False}},
+                {"type": "AlexaInterface", "interface": "Alexa.EndpointHealth", "version": "3",
+                 "properties": {"supported": [{"name": "connectivity"}], "retrievable": True, "proactivelyReported": False}}
+            ]
+        elif device_info["type"] == "THERMOSTAT":
+            capabilities = [
+                {"type": "AlexaInterface", "interface": "Alexa.ThermostatController", "version": "3",
+                 "properties": {"supported": [
+                     {"name": "targetSetpoint"},
+                     {"name": "thermostatMode"}
+                 ], "retrievable": True, "proactivelyReported": False}},
+                {"type": "AlexaInterface", "interface": "Alexa.TemperatureSensor", "version": "3",
+                 "properties": {"supported": [{"name": "temperature"}], "retrievable": True, "proactivelyReported": False}},
+                {"type": "AlexaInterface", "interface": "Alexa.EndpointHealth", "version": "3",
+                 "properties": {"supported": [{"name": "connectivity"}], "retrievable": True, "proactivelyReported": False}}
+            ]
+        elif device_info["type"] == "CONTACT_SENSOR":
+            capabilities = [
+                {"type": "AlexaInterface", "interface": "Alexa.ContactSensor", "version": "3",
+                 "properties": {"supported": [{"name": "detectionState"}], "retrievable": True, "proactivelyReported": False}},
+                {"type": "AlexaInterface", "interface": "Alexa.TemperatureSensor", "version": "3",
+                 "properties": {"supported": [{"name": "temperature"}], "retrievable": True, "proactivelyReported": False}},
+                {"type": "AlexaInterface", "interface": "Alexa.EndpointHealth", "version": "3",
+                 "properties": {"supported": [{"name": "connectivity"}], "retrievable": True, "proactivelyReported": False}}
+            ]
         endpoints.append({
             "endpointId": device_info["id"],
             "friendlyName": device_info["friendlyName"],
             "description": f"My smart {device_info['type']}",
             "manufacturerName": "My Awesome IoT Company",
-            "displayCategories": ["COFFEE_MAKER"],
+            "displayCategories": [device_info["type"]],
             "capabilities": capabilities
         })
     return jsonify({"event": {"header": {"namespace": "Alexa.Discovery", "name": "Discover.Response", "payloadVersion": "3"},
